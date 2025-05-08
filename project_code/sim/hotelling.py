@@ -4,8 +4,9 @@ import sys
 from project_code.geometry.circle import Circle
 from project_code.geometry.sphere import Sphere
 
+def compute_payoff(domain, positions, n_sample
 
-def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=None):
+def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=None, samples_per_iter = None):
     """
     Simulate Hotelling in N dimensions with the given parameters.and
 
@@ -44,10 +45,19 @@ def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=
     if len(start_positions) != num_players:
         raise ValueError("Starting positions must be a list of length equal to the number of players.")
 
+    # Initialize player positions
+    positions = start_positions
+
     if domain == "circle":
         domain = Circle(radius=1)
     elif domain == "sphere":
         domain = Sphere(radius=1)
+        # Convert start from angle to Cartesian coordinates
+        positions = [Sphere.from_angles(theta, phi) for theta, phi in start_positions]
+
+    # Use scipy minimizer to implement best response dynamics
+    # Payoff is the area of the circle/ sphere that is nearest to the player
+    for iteration in range(max_iter):
 
 
 if __name__ == "__main__":
@@ -68,6 +78,7 @@ if __name__ == "__main__":
         start_positions = [list(map(float, line.strip().split())) for line in lines[2:2+num_players]]
         tol = float(lines[2+num_players].strip())
         max_iter = int(lines[3+num_players].strip())
+        samples_per_iter = int(lines[4+num_players].strip())
 
     # Run the simulation
     print("Running simulation with the following parameters:")
@@ -76,4 +87,5 @@ if __name__ == "__main__":
     print(f"Starting positions: {start_positions}")
     print(f"Tolerance: {tol}")
     print(f"Max iterations: {max_iter}")
+    print(f"Samples per iteration: {samples_per_iter}")
     sim(domain=domain, num_players=num_players, start_positions=start_positions, tol=tol, max_iter=max_iter)

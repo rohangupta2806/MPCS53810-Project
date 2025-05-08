@@ -37,17 +37,14 @@ class Sphere(Domain):
         float
             The distance between the two points.
         """
-        # Calculate the great-circle distance using the haversine formula
-        x = np.array(x)
-        y = np.array(y)
 
-        dlat = np.radians(y[0] - x[0])
-        dlon = np.radians(y[1] - x[1])
+        # Project points onto the sphere's surface
+        x_proj = self.project(x)
+        y_proj = self.project(y)
 
-        a = np.sin(dlat / 2)**2 + np.cos(np.radians(x[0])) * np.cos(np.radians(y[0])) * np.sin(dlon / 2)**2
-        c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
-
-        return self.radius * c
+        cosine = np.dot(x_proj, y_proj) / self.radius**2
+        angle = np.arccos(np.clip(cosine, -1.0, 1.0))  # Clip to avoid numerical errors
+        return angle * self.radius
 
     def project(self, x):
         """
@@ -63,14 +60,13 @@ class Sphere(Domain):
         list
             The projected point on the sphere's surface.
         """
-        norm = np.linalg.norm(x)
-        if norm > self.radius:
-            return (x / norm) * self.radius
-        else:
-            return x
+
+        x = np.asarray(x, dtype=float)
+        norm = np.linalg.norm(x, axis = -1, keepdims=True)
+        return self.radius * (x / norm) if norm > 0 else x
 
     @staticmethod
-    def from_angles(theta, phi):
+    def from_angles(theta, phi, radius=1):
         '''
         Create a point on the sphere's surface from spherical coordinates.
 
@@ -91,5 +87,4 @@ class Sphere(Domain):
         y = np.sin(theta) * np.sin(phi)
         z = np.cos(theta)
 
-        return [x, y, z]
-
+        return radius * np.array([x, y, z])
