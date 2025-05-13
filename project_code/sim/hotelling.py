@@ -4,7 +4,26 @@ import sys
 from project_code.geometry.circle import Circle
 from project_code.geometry.sphere import Sphere
 
-def compute_payoff(domain, positions, n_sample
+def compute_payoff(domain, positions, n_samples=1000):
+    """
+    Compute the payoff for each player in the simulation.
+
+    Parameters
+    ----------
+    domain : The domain in which to run the simulation.
+    type: Domain
+    positions : The positions of the players.
+    type: list
+    n_samples : The number of samples to use for computing the payoff.
+    type: int
+
+    Returns
+    -------
+    list
+        The payoffs for each player.
+    """
+
+
 
 def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=None, samples_per_iter = None):
     """
