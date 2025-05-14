@@ -1,0 +1,8 @@
+circle                  # domain
+3                       # number of players
+0.2 0.5                 # player 1 (x,y)
+0.5 0.8                # player 2
+0.3 0.7                 # player 3
+1e-6                # convergence tolerance
+100                    # max iterations
+20000                   # samples per iteration
