@@ -4,48 +4,36 @@ import os
 import sys
 from project_code.geometry.circle import Circle
 from project_code.geometry.sphere import Sphere
-from project_code.vis.plotting import animate
-from matplotlib.collections import PolyCollection
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from matplotlib import pyplot as plt
 from itertools import cycle
 COLOR_CYCLE = cycle(plt.get_cmap("tab20").colors)   # 20 bright hues
-from scipy.spatial import Voronoi, voronoi_plot_2d
-from shapely.geometry import Polygon, Point
-from project_code.geometry.domain import Domain
 import pathlib
 import imageio.v2 as imageio
 
-def compute_payoff(domain, positions, n_samples=1000):
+def compute_payoff(domain, positions, *, cloud=None, n_samples=50_000):
     """
-    Compute the payoff for each player in the simulation.
+    Monte-Carlo pay-off vector (demand shares).
 
     Parameters
     ----------
-    domain : The domain in which to run the simulation.
-    type: Domain
-    positions : The positions of the players.
-    type: list
-    n_samples : The number of samples to use for computing the payoff.
-    type: int
+    domain      : the Domain instance (Circle or Sphere)
+    positions   : list/array of k player positions, shape (k, dim)
+    cloud       : (n, dim) ndarray of demand points **reused** inside one
+                  outer iteration; if None a fresh cloud is drawn ad hoc.
+    n_samples   : how many points to draw for the ad-hoc cloud
 
     Returns
     -------
-    list
-        The payoffs for each player.
+    numpy.ndarray, length k, summing to 1
     """
-    positions = np.asarray(positions, dtype=float).reshape(len(positions), -1)
+    pts = np.asarray(positions, float).reshape(len(positions), -1)
 
-    eps = 1e-8
-    positions += eps * np.random.randn(*positions.shape)  # add some noise to avoid singularities
+    # make a cloud only when caller didn’t supply one (slow path)
+    if cloud is None:
+        rng   = np.random.default_rng()
+        cloud = domain._make_cloud(n_samples, rng)   # helper you added
 
-    try:
-        # Compute the Voronoi payoffs for the given positions
-        payoffs = domain.voronoi_payoffs(positions)
-    except NotImplementedError:
-        print("Voronoi payoffs not implemented for this domain. Monte Carlo not yet implemented.")
-
-    return payoffs
+    return domain.mc_shares(pts, cloud)              # helper you added
 
 def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=None, samples_per_iter = None):
     """
@@ -73,7 +61,9 @@ def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=
     if tol is None:
         raise ValueError("Tolerance must be provided.")
     if max_iter is None:
-        raise ValueError("Maximum iterations must be provided.")
+        raise ValueError("Maximum number of iterations to run the simulation.")
+    if samples_per_iter is None:
+        raise ValueError("Samples per iteration must be provided.")
 
     if domain not in ["circle", "sphere"]:
         raise ValueError("Domain must be either 'circle' or 'sphere'.")
@@ -103,68 +93,85 @@ def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=
 
     player_colors = [next(COLOR_CYCLE) for _ in range(num_players)]
     for iteration in range(max_iter):
-        print(f"Iteration {iteration + 1}/{max_iter}")
+        print(f"Iteration {iteration+1}/{max_iter}")
+
+        # one shared cloud for this iteration
+        rng   = np.random.default_rng(iteration)
+        cloud = domain._make_cloud(samples_per_iter, rng)
+
         old_positions = positions.copy()
         new_positions = positions.copy()
-        repulsion_weight = 1e-3
-        previous_payoff = compute_payoff(domain, positions)
-        for i in range(num_players):
-            def objective_function(x):
-                # Compute the payoff for the player at position x
-                candidate = domain.project(x)
-                tmp = old_positions.copy()
-                tmp[i] = candidate
-                payoff = compute_payoff(domain, tmp)
-                # dmin = np.min([domain.distance(candidate, q) for j, q in enumerate(tmp) if j != i]) + 1e-12
-                # The objective is to maximize the payoff minus a repulsion term
-                return -(payoff[i])
 
-            res = scipy.optimize.minimize(objective_function, old_positions[i], method='Nelder-Mead')
+        previous_payoff = compute_payoff(domain, old_positions, cloud=cloud)
+
+        # --------------- best-response search --------------------------
+        for i in range(num_players):
+            def objective(x):
+                cand = domain.project(x)
+                pts  = old_positions.copy()
+                pts[i] = cand
+                share_i = compute_payoff(domain, pts, cloud=cloud)[i]
+                return -share_i                              # maximise
+
+            res = scipy.optimize.minimize(
+                    objective,
+                    old_positions[i],
+                    method='Nelder-Mead')
+
             new_positions[i] = domain.project(res.x)
 
         positions = new_positions
-        for i in range(num_players):
-            # Compute the payoff for the player at position x
-            candidate = domain.project(positions[i])
-            tmp = positions.copy()
-            tmp[i] = candidate
-            payoff = compute_payoff(domain, tmp)
-            # dmin = np.min([domain.distance(candidate, q) for j, q in enumerate(tmp) if j != i]) + 1e-12
-            # The objective is to maximize the payoff minus a repulsion term
-            print(f"Player {i+1}: Payoff: {payoff[i]}")
 
-        current_payoff = compute_payoff(domain, positions)
+        from scipy.spatial.distance import pdist
+        print("min distance:", pdist(positions).min())
+
+        payoffs = compute_payoff(domain, positions, cloud=cloud)
+        for idx, p in enumerate(payoffs, 1):
+            print(f" Player {idx}: share {p:.4f}")
+
+        current_payoff = payoffs
 
         if isinstance(domain, Circle):
-            # ------------- coloured Voronoi on a disk ----------------
-            R = domain.radius
+            R   = domain.radius
+            pts = np.asarray(positions, float)          # (k,2)
+            k   = len(pts)
 
-            vor = Voronoi(positions)
-            regions, verts = domain.voronoi_finite_polygons_2d(vor, radius=1000*R)
-            disk = Point(0, 0).buffer(R, 256)
+            # ------------- raster parameters -----------------
+            RES   = 400                  # pixels in one dimension
+            PAD   = 1.05 * R             # a whisker larger than disk
+            xs    = np.linspace(-PAD, PAD, RES)
+            ys    = np.linspace(-PAD, PAD, RES)
+            X, Y  = np.meshgrid(xs, ys)
+            mask  = X*X + Y*Y <= R*R     # inside disk
+            # -------------------------------------------------
 
-            fig, ax = plt.subplots(figsize=(5, 5))
-            ax.add_patch(plt.Circle((0, 0), R, fill=False, lw=2, color="k"))
+            # distance^2 from every pixel to every player
+            #   grid  (RES,RES,1)  vs pts (1,1,k,2)  ->  (RES,RES,k)
+            diff  = np.stack([X[...,None], Y[...,None]], axis=-1) - pts[None,None,:,:]
+            dist2 = (diff**2).sum(axis=-1)
 
-            for idx, reg in enumerate(regions):
-                poly = Polygon(verts[reg]).intersection(disk)
-                if poly.is_empty:
-                    continue
-                xs, ys = poly.exterior.xy
-                ax.fill(xs, ys, facecolor=player_colors[idx], edgecolor="k", alpha=0.35)
+            owner = dist2.argmin(axis=-1)          # (RES,RES) int map
+            owner[~mask] = k                       # outside disk sentinels
 
-            pts = np.asarray(positions)
-            for idx, (x, y) in enumerate(pts):
-                ax.scatter(x, y, s=80, c="k", zorder=3)
-                ax.text(x, y, f"P{idx+1}", fontsize=9, ha="center", va="center",
-                        bbox=dict(boxstyle="round,pad=0.2",
-                        fc="white", ec="none", alpha=0.8), zorder=4)
+            # build an RGBA image
+            img = np.zeros((RES, RES, 3))
+            for pid in range(k):
+                img[owner == pid] = player_colors[pid][:3]  # ignore alpha
+            img[owner == k] = (1,1,1)                       # white outside
 
-            ax.set_xlim(-R, R); ax.set_ylim(-R, R)
-            ax.set_aspect("equal"); ax.set_axis_off()
-            ax.set_title("Configuration (disk)")
+            fig, ax = plt.subplots(figsize=(5,5))
+            ax.imshow(img, extent=(-PAD, PAD, -PAD, PAD), origin='lower')
+            ax.add_patch(plt.Circle((0,0), R, fc='none', ec='k', lw=2))
+
+            # scatter players & labels
+            for i,(x,y) in enumerate(pts):
+                ax.scatter(x,y,c='k',s=60,zorder=3)
+                ax.text(x,y,f"P{i+1}",ha='center',va='center',fontsize=8,
+                        bbox=dict(boxstyle='round,pad=0.2',fc='white',ec='none'))
+
+            ax.set_xlim(-R,R); ax.set_ylim(-R,R)
+            ax.set_aspect('equal'); ax.set_axis_off()
             fig.tight_layout()
-
             fig.savefig(outdir / f"frame_{iteration:03d}.png", dpi=300)
             plt.close(fig)
 
@@ -238,4 +245,5 @@ if __name__ == "__main__":
     print(f"Tolerance: {tol}")
     print(f"Max iterations: {max_iter}")
     print(f"Samples per iteration: {samples_per_iter}")
-    sim(domain=domain, num_players=num_players, start_positions=start_positions, tol=tol, max_iter=max_iter)
+    sim(domain=domain, num_players=num_players, start_positions=start_positions,
+        tol=tol, max_iter=max_iter, samples_per_iter=samples_per_iter)

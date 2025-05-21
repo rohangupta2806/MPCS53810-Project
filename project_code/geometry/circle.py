@@ -62,30 +62,34 @@ class Circle(Domain):
         else:
             return x
 
-    def voronoi_payoffs(self, positions):
-        """
-        Calculate the Voronoi payoffs for a given set of positions.
 
-        Parameters
-        ----------
-        positions : The positions of the players.
-        type: list
+    def _make_cloud(self, n, rng):
+        r  = np.sqrt(rng.random(n)) * self.radius
+        θ  = 2*np.pi * rng.random(n)
+        return np.column_stack([r*np.cos(θ), r*np.sin(θ)])
 
-        Returns
-        -------
-        list
-            The Voronoi payoffs for each player.
+    def mc_shares(self, pts, cloud):
         """
-        # Calculate the Voronoi payoffs for each player
-        payoffs = []
-        vor = Voronoi(positions)
-        regions, vertices = self.voronoi_finite_polygons_2d(vor, radius=5*self.radius)
-        circle = Point(0, 0).buffer(self.radius)
-        # Clip the Voronoi regions to the circle
-        for reg in regions:
-            poly = Polygon(vertices[reg]).intersection(circle)
-            payoffs.append(poly.area / (np.pi * self.radius**2))
-        return payoffs
+        Monte-Carlo shares for the k players in `pts`, using a *given*
+        cloud of demand points.  Returns length-k array summing to 1.
+        """
+        diff  = cloud[:, None, :] - pts[None, :, :]          # (n,k,2)
+        owner = np.argmin((diff**2).sum(axis=2), axis=1)     # (n,)
+        counts = np.bincount(owner, minlength=len(pts))
+        return counts / len(cloud)
+
+    def compute_payoff(domain, positions, *, cloud=None, n_samples=50_000):
+        """
+        Monte-Carlo pay-off vector.  If `cloud` is supplied we reuse it,
+        otherwise we allocate one ad hoc (slow path).
+        """
+        pts = np.asarray(positions, float).reshape(len(positions), -1)
+
+        if cloud is None:                        # slow one-off call
+            rng   = np.random.default_rng()
+            cloud = domain._make_cloud(n_samples, rng)
+
+        return domain.mc_shares(pts, cloud)
 
     def draw_boundary(self, ax):
         """
