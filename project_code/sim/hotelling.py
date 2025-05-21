@@ -11,6 +11,10 @@ from matplotlib import pyplot as plt
 from itertools import cycle
 COLOR_CYCLE = cycle(plt.get_cmap("tab20").colors)   # 20 bright hues
 from scipy.spatial import Voronoi, voronoi_plot_2d
+from shapely.geometry import Polygon, Point
+from project_code.geometry.domain import Domain
+import pathlib
+import imageio.v2 as imageio
 
 def compute_payoff(domain, positions, n_samples=1000):
     """
@@ -82,6 +86,8 @@ def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=
     if len(start_positions) != num_players:
         raise ValueError("Starting positions must be a list of length equal to the number of players.")
 
+    outdir = pathlib.Path("frames")
+    outdir.mkdir(parents=True, exist_ok=True)
     # Initialize player positions
     positions = start_positions
 
@@ -95,12 +101,9 @@ def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=
     # Use scipy minimizer to implement best response dynamics
     # Payoff is the area of the circle/ sphere that is nearest to the player
 
-    history = []
+    player_colors = [next(COLOR_CYCLE) for _ in range(num_players)]
     for iteration in range(max_iter):
         print(f"Iteration {iteration + 1}/{max_iter}")
-        payoffs = compute_payoff(domain, positions)
-        history.append((positions.copy(), payoffs.copy()))
-
         old_positions = positions.copy()
         new_positions = positions.copy()
         repulsion_weight = 1e-3
@@ -111,9 +114,9 @@ def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=
                 tmp = old_positions.copy()
                 tmp[i] = candidate
                 payoff = compute_payoff(domain, tmp)
-                dmin = np.min([domain.distance(candidate, q) for j, q in enumerate(tmp) if j != i]) + 1e-12
+                # dmin = np.min([domain.distance(candidate, q) for j, q in enumerate(tmp) if j != i]) + 1e-12
                 # The objective is to maximize the payoff minus a repulsion term
-                return -(payoff[i] - repulsion_weight / dmin)
+                return -(payoff[i])
 
             res = scipy.optimize.minimize(objective_function, old_positions[i], method='Nelder-Mead')
             new_positions[i] = domain.project(res.x)
@@ -121,67 +124,72 @@ def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=
 
         positions = new_positions
 
+        if isinstance(domain, Circle):
+            # ------------- coloured Voronoi on a disk ----------------
+            R = domain.radius
+
+            vor = Voronoi(positions)
+            regions, verts = domain.voronoi_finite_polygons_2d(vor, radius=1000*R)
+            disk = Point(0, 0).buffer(R, 256)
+
+            fig, ax = plt.subplots(figsize=(5, 5))
+            ax.add_patch(plt.Circle((0, 0), R, fill=False, lw=2, color="k"))
+
+            for idx, reg in enumerate(regions):
+                poly = Polygon(verts[reg]).intersection(disk)
+                if poly.is_empty:
+                    continue
+                xs, ys = poly.exterior.xy
+                ax.fill(xs, ys, facecolor=player_colors[idx], edgecolor="k", alpha=0.35)
+
+            pts = np.asarray(positions)
+            for idx, (x, y) in enumerate(pts):
+                ax.scatter(x, y, s=80, c="k", zorder=3)
+                ax.text(x, y, f"P{idx+1}", fontsize=9, ha="center", va="center",
+                        bbox=dict(boxstyle="round,pad=0.2",
+                        fc="white", ec="none", alpha=0.8), zorder=4)
+
+            ax.set_xlim(-R, R); ax.set_ylim(-R, R)
+            ax.set_aspect("equal"); ax.set_axis_off()
+            ax.set_title("Configuration (disk)")
+            fig.tight_layout()
+
+            fig.savefig(outdir / f"frame_{iteration:03d}.png", dpi=300)
+            plt.close(fig)
+
+        elif isinstance(domain, Sphere):
+            # --------- same scatter as before, but label points --------
+            fig = plt.figure(figsize=(6, 6))
+            ax = fig.add_subplot(111, projection="3d")
+
+            u = np.linspace(0, 2*np.pi, 60)
+            v = np.linspace(0, np.pi, 30)
+            x = domain.radius * np.outer(np.cos(u), np.sin(v))
+            y = domain.radius * np.outer(np.sin(u), np.sin(v))
+            z = domain.radius * np.outer(np.ones_like(u), np.cos(v))
+            ax.plot_wireframe(x, y, z, color="lightgray", alpha=0.4)
+
+            pts = np.asarray(positions)
+            for idx, (x, y, z) in enumerate(pts):
+                ax.scatter(x, y, z, c="k", s=60, depthshade=True)
+                ax.text(x, y, z, f"P{idx+1}", fontsize=8,
+                        ha="center", va="center",
+                        bbox=dict(boxstyle="round,pad=0.2",
+                            fc="white", ec="none", alpha=0.75))
+
+            ax.set_box_aspect([1, 1, 1])
+            ax.set_axis_off()
+            ax.set_title("Final configuration (sphere)")
+
         # Check for convergence
         if np.linalg.norm(np.array(positions) - np.array(old_positions)) < tol:
             print(f"Converged after {iteration} iterations.")
             break
 
-    if isinstance(domain, Circle):
-        # ------------- coloured Voronoi on a disk ----------------
-        from shapely.geometry import Polygon, Point
-        from project_code.geometry.domain import Domain
-        R = domain.radius
-
-        vor = Voronoi(positions)
-        regions, verts = domain.voronoi_finite_polygons_2d(vor, radius=1000*R)
-        disk = Point(0, 0).buffer(R, 256)
-
-        fig, ax = plt.subplots(figsize=(5, 5))
-        ax.add_patch(plt.Circle((0, 0), R, fill=False, lw=2, color="k"))
-
-        for reg, colour in zip(regions, COLOR_CYCLE):
-            poly = Polygon(verts[reg]).intersection(disk)
-            if poly.is_empty:
-                continue
-            xs, ys = poly.exterior.xy
-            ax.fill(xs, ys, facecolor=colour, edgecolor="k", alpha=0.35)
-
-        pts = np.asarray(positions)
-        for idx, (x, y) in enumerate(pts):
-            ax.scatter(x, y, s=80, c="k", zorder=3)
-            ax.text(x, y, f"P{idx+1}", fontsize=9, ha="center", va="center",
-                    bbox=dict(boxstyle="round,pad=0.2",
-                            fc="white", ec="none", alpha=0.8), zorder=4)
-
-        ax.set_xlim(-R, R); ax.set_ylim(-R, R)
-        ax.set_aspect("equal"); ax.set_axis_off()
-        ax.set_title("Final configuration (disk)")
-        plt.show()
-
-    elif isinstance(domain, Sphere):
-        # --------- same scatter as before, but label points --------
-        fig = plt.figure(figsize=(6, 6))
-        ax = fig.add_subplot(111, projection="3d")
-
-        u = np.linspace(0, 2*np.pi, 60)
-        v = np.linspace(0, np.pi, 30)
-        x = domain.radius * np.outer(np.cos(u), np.sin(v))
-        y = domain.radius * np.outer(np.sin(u), np.sin(v))
-        z = domain.radius * np.outer(np.ones_like(u), np.cos(v))
-        ax.plot_wireframe(x, y, z, color="lightgray", alpha=0.4)
-
-        pts = np.asarray(positions)
-        for idx, (x, y, z) in enumerate(pts):
-            ax.scatter(x, y, z, c="k", s=60, depthshade=True)
-            ax.text(x, y, z, f"P{idx+1}", fontsize=8,
-                    ha="center", va="center",
-                    bbox=dict(boxstyle="round,pad=0.2",
-                            fc="white", ec="none", alpha=0.75))
-
-        ax.set_box_aspect([1, 1, 1])
-        ax.set_axis_off()
-        ax.set_title("Final configuration (sphere)")
-        plt.show()
+    with imageio.get_writer("hotelling.gif", mode='I', duration=0.5) as writer:
+        for png in sorted(outdir.glob("frame_*.png")):
+            image = imageio.imread(png)
+            writer.append_data(image)
 
 if __name__ == "__main__":
     # Feed in the file name from the command line
