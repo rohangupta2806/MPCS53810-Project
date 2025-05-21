@@ -36,7 +36,7 @@ def compute_payoff(domain, positions, n_samples=1000):
     """
     positions = np.asarray(positions, dtype=float).reshape(len(positions), -1)
 
-    eps = 1e-12
+    eps = 1e-8
     positions += eps * np.random.randn(*positions.shape)  # add some noise to avoid singularities
 
     try:
@@ -107,6 +107,7 @@ def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=
         old_positions = positions.copy()
         new_positions = positions.copy()
         repulsion_weight = 1e-3
+        previous_payoff = compute_payoff(domain, positions)
         for i in range(num_players):
             def objective_function(x):
                 # Compute the payoff for the player at position x
@@ -120,9 +121,19 @@ def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=
 
             res = scipy.optimize.minimize(objective_function, old_positions[i], method='Nelder-Mead')
             new_positions[i] = domain.project(res.x)
-            print(f"Player {i + 1}: {new_positions[i]} -> {res.x} (Payoff: {-res.fun})")
 
         positions = new_positions
+        for i in range(num_players):
+            # Compute the payoff for the player at position x
+            candidate = domain.project(positions[i])
+            tmp = positions.copy()
+            tmp[i] = candidate
+            payoff = compute_payoff(domain, tmp)
+            # dmin = np.min([domain.distance(candidate, q) for j, q in enumerate(tmp) if j != i]) + 1e-12
+            # The objective is to maximize the payoff minus a repulsion term
+            print(f"Player {i+1}: Payoff: {payoff[i]}")
+
+        current_payoff = compute_payoff(domain, positions)
 
         if isinstance(domain, Circle):
             # ------------- coloured Voronoi on a disk ----------------
@@ -182,7 +193,8 @@ def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=
             ax.set_title("Final configuration (sphere)")
 
         # Check for convergence
-        if np.linalg.norm(np.array(positions) - np.array(old_positions)) < tol:
+        if np.linalg.norm(np.array(positions) - np.array(old_positions)) < tol\
+                and np.linalg.norm(np.array(current_payoff) - np.array(previous_payoff)) < tol:
             print(f"Converged after {iteration} iterations.")
             break
 
