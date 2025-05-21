@@ -1,9 +1,6 @@
 # Ignore frames directory
 frames/
 
-# Ignore all gif files
-*.gif
-
 # Python related
 __pycache__/
 *.py[cod]

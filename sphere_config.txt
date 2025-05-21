@@ -1,0 +1,12 @@
+sphere                  # domain
+6                       # number of players
+0.7 0.9                 # player 1 (theta, phi)
+0.8 1.0                 # player 2
+0.9 1.1                 # player 3
+0.75 0.95               # player 4
+0.85 1.05               # player 5
+0.95 1.15               # player 6 - All clustered in one region
+1e-6                    # convergence tolerance
+100                      # max iterations
+20000                   # samples per iteration
+0.01                   # regularization parameter

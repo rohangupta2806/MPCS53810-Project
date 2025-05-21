@@ -8,7 +8,7 @@ from matplotlib import pyplot as plt
 from itertools import cycle
 COLOR_CYCLE = cycle(plt.get_cmap("tab20").colors)   # 20 bright hues
 import pathlib
-import imageio.v2 as imageio
+from project_code.vis.plotting import plot_circle, plot_sphere, create_animation
 
 def compute_payoff(domain, positions, *, cloud=None, n_samples=50_000):
     """
@@ -26,16 +26,21 @@ def compute_payoff(domain, positions, *, cloud=None, n_samples=50_000):
     -------
     numpy.ndarray, length k, summing to 1
     """
-    pts = np.asarray(positions, float).reshape(len(positions), -1)
+    # Convert positions to a uniform numpy array more carefully
+    positions_array = []
+    for pos in positions:
+        # Ensure each position is a numpy array
+        pos_array = np.asarray(pos, dtype=float)
+        positions_array.append(pos_array)
 
-    # make a cloud only when caller didn’t supply one (slow path)
+    # make a cloud only when caller didn't supply one (slow path)
     if cloud is None:
-        rng   = np.random.default_rng()
-        cloud = domain._make_cloud(n_samples, rng)   # helper you added
+        rng = np.random.default_rng()
+        cloud = domain._make_cloud(n_samples, rng)
 
-    return domain.mc_shares(pts, cloud)              # helper you added
+    return domain.mc_shares(positions_array, cloud)
 
-def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=None, samples_per_iter = None):
+def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=None, samples_per_iter = None, regularization=None):
     """
     Simulate Hotelling in N dimensions with the given parameters.and
 
@@ -64,6 +69,8 @@ def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=
         raise ValueError("Maximum number of iterations to run the simulation.")
     if samples_per_iter is None:
         raise ValueError("Samples per iteration must be provided.")
+    if regularization is None:
+        raise ValueError("Regularization must be provided.")
 
     if domain not in ["circle", "sphere"]:
         raise ValueError("Domain must be either 'circle' or 'sphere'.")
@@ -83,10 +90,14 @@ def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=
 
     if domain == "circle":
         domain = Circle(radius=1)
+        # Ensure all positions are numpy arrays
+        positions = [np.array(pos, dtype=float) for pos in start_positions]
     elif domain == "sphere":
         domain = Sphere(radius=1)
         # Convert start from angle to Cartesian coordinates
-        positions = [Sphere.from_angles(theta, phi) for theta, phi in start_positions]
+        positions = [Sphere.from_angles(float(theta), float(phi)) for theta, phi in start_positions]
+        # Ensure all positions are numpy arrays with the same shape
+        positions = [np.array(pos, dtype=float) for pos in positions]
 
     # Use scipy minimizer to implement best response dynamics
     # Payoff is the area of the circle/ sphere that is nearest to the player
@@ -107,15 +118,21 @@ def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=
         # --------------- best-response search --------------------------
         for i in range(num_players):
             def objective(x):
-                cand = domain.project(x)
-                pts  = old_positions.copy()
+                # Ensure x has proper shape for projection
+                x_reshaped = np.asarray(x, dtype=float)
+                cand = domain.project(x_reshaped)
+                pts = old_positions.copy()
                 pts[i] = cand
                 share_i = compute_payoff(domain, pts, cloud=cloud)[i]
-                return -share_i                              # maximise
+                movement_cost = regularization * np.linalg.norm(np.array(cand) - np.array(old_positions[i]))
+                return -share_i + movement_cost  # maximise
+
+            # Ensure initial position is 1D
+            initial_position = np.array(old_positions[i]).flatten()
 
             res = scipy.optimize.minimize(
                     objective,
-                    old_positions[i],
+                    initial_position,
                     method='Nelder-Mead')
 
             new_positions[i] = domain.project(res.x)
@@ -129,75 +146,13 @@ def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=
         for idx, p in enumerate(payoffs, 1):
             print(f" Player {idx}: share {p:.4f}")
 
-        current_payoff = payoffs
+        current_payoff = payoffs # payoffs are the shares
 
+        # Replace the plotting code with calls to the new functions
         if isinstance(domain, Circle):
-            R   = domain.radius
-            pts = np.asarray(positions, float)          # (k,2)
-            k   = len(pts)
-
-            # ------------- raster parameters -----------------
-            RES   = 400                  # pixels in one dimension
-            PAD   = 1.05 * R             # a whisker larger than disk
-            xs    = np.linspace(-PAD, PAD, RES)
-            ys    = np.linspace(-PAD, PAD, RES)
-            X, Y  = np.meshgrid(xs, ys)
-            mask  = X*X + Y*Y <= R*R     # inside disk
-            # -------------------------------------------------
-
-            # distance^2 from every pixel to every player
-            #   grid  (RES,RES,1)  vs pts (1,1,k,2)  ->  (RES,RES,k)
-            diff  = np.stack([X[...,None], Y[...,None]], axis=-1) - pts[None,None,:,:]
-            dist2 = (diff**2).sum(axis=-1)
-
-            owner = dist2.argmin(axis=-1)          # (RES,RES) int map
-            owner[~mask] = k                       # outside disk sentinels
-
-            # build an RGBA image
-            img = np.zeros((RES, RES, 3))
-            for pid in range(k):
-                img[owner == pid] = player_colors[pid][:3]  # ignore alpha
-            img[owner == k] = (1,1,1)                       # white outside
-
-            fig, ax = plt.subplots(figsize=(5,5))
-            ax.imshow(img, extent=(-PAD, PAD, -PAD, PAD), origin='lower')
-            ax.add_patch(plt.Circle((0,0), R, fc='none', ec='k', lw=2))
-
-            # scatter players & labels
-            for i,(x,y) in enumerate(pts):
-                ax.scatter(x,y,c='k',s=60,zorder=3)
-                ax.text(x,y,f"P{i+1}",ha='center',va='center',fontsize=8,
-                        bbox=dict(boxstyle='round,pad=0.2',fc='white',ec='none'))
-
-            ax.set_xlim(-R,R); ax.set_ylim(-R,R)
-            ax.set_aspect('equal'); ax.set_axis_off()
-            fig.tight_layout()
-            fig.savefig(outdir / f"frame_{iteration:03d}.png", dpi=300)
-            plt.close(fig)
-
+            plot_circle(domain, positions, player_colors, outdir, iteration)
         elif isinstance(domain, Sphere):
-            # --------- same scatter as before, but label points --------
-            fig = plt.figure(figsize=(6, 6))
-            ax = fig.add_subplot(111, projection="3d")
-
-            u = np.linspace(0, 2*np.pi, 60)
-            v = np.linspace(0, np.pi, 30)
-            x = domain.radius * np.outer(np.cos(u), np.sin(v))
-            y = domain.radius * np.outer(np.sin(u), np.sin(v))
-            z = domain.radius * np.outer(np.ones_like(u), np.cos(v))
-            ax.plot_wireframe(x, y, z, color="lightgray", alpha=0.4)
-
-            pts = np.asarray(positions)
-            for idx, (x, y, z) in enumerate(pts):
-                ax.scatter(x, y, z, c="k", s=60, depthshade=True)
-                ax.text(x, y, z, f"P{idx+1}", fontsize=8,
-                        ha="center", va="center",
-                        bbox=dict(boxstyle="round,pad=0.2",
-                            fc="white", ec="none", alpha=0.75))
-
-            ax.set_box_aspect([1, 1, 1])
-            ax.set_axis_off()
-            ax.set_title("Final configuration (sphere)")
+            plot_sphere(domain, positions, current_payoff, player_colors, outdir, iteration) # Pass current_payoff as shares
 
         # Check for convergence
         if np.linalg.norm(np.array(positions) - np.array(old_positions)) < tol\
@@ -205,10 +160,8 @@ def sim(domain=None, num_players=None, start_positions=None, tol=None, max_iter=
             print(f"Converged after {iteration} iterations.")
             break
 
-    with imageio.get_writer("hotelling.gif", mode='I', duration=0.5) as writer:
-        for png in sorted(outdir.glob("frame_*.png")):
-            image = imageio.imread(png)
-            writer.append_data(image)
+    # Replace the animation code with a call to the new function
+    create_animation(outdir, "hotelling.gif", fps=2)
 
 if __name__ == "__main__":
     # Feed in the file name from the command line
@@ -236,6 +189,7 @@ if __name__ == "__main__":
     tol = float(lines[2+num_players].strip())
     max_iter = int(lines[3+num_players].strip())
     samples_per_iter = int(lines[4+num_players].strip())
+    regularization = float(lines[5+num_players].strip())
 
     # Run the simulation
     print("Running simulation with the following parameters:")
@@ -245,5 +199,6 @@ if __name__ == "__main__":
     print(f"Tolerance: {tol}")
     print(f"Max iterations: {max_iter}")
     print(f"Samples per iteration: {samples_per_iter}")
+    print(f"Regularization: {regularization}")
     sim(domain=domain, num_players=num_players, start_positions=start_positions,
-        tol=tol, max_iter=max_iter, samples_per_iter=samples_per_iter)
+        tol=tol, max_iter=max_iter, samples_per_iter=samples_per_iter, regularization=regularization)
