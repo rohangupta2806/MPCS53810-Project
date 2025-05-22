@@ -1,5 +1,6 @@
 # Ignore frames directory
 frames*/
+animations/
 
 # Python related
 __pycache__/
