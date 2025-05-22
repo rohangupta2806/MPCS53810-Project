@@ -1,5 +1,5 @@
 # Ignore frames directory
-frames/
+frames*/
 
 # Python related
 __pycache__/
