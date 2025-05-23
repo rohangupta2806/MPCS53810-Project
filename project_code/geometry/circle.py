@@ -60,18 +60,11 @@ class Circle(Domain):
         else:
             return x
 
-    def compute_payoff(domain, positions, *, cloud=None, n_samples=50_000):
-        """
-        Monte-Carlo pay-off vector.  If `cloud` is supplied we reuse it,
-        otherwise we allocate one ad hoc (slow path).
-        """
-        pts = np.asarray(positions, float).reshape(len(positions), -1)
 
-        if cloud is None:                        # slow one-off call
-            rng   = np.random.default_rng()
-            cloud = domain._make_cloud(n_samples, rng)
-
-        return domain.mc_shares(pts, cloud)
+    def _make_cloud(self, n, rng):
+        r  = np.sqrt(rng.random(n)) * self.radius
+        θ  = 2*np.pi * rng.random(n)
+        return np.column_stack([r*np.cos(θ), r*np.sin(θ)])
 
     def draw_boundary(self, ax):
         """
@@ -87,4 +80,3 @@ class Circle(Domain):
         ax.set_xlim(-self.radius, self.radius)
         ax.set_ylim(-self.radius, self.radius)
         ax.set_aspect('equal')
-

@@ -60,6 +60,29 @@ class Square(Domain):
         # np.clip works element-wise, suitable for single points (1D array) or multiple points (2D array)
         return np.clip(x, -half_side, half_side)
 
+    def _make_cloud(self, n, rng):
+        """
+        Generate a cloud of n random points uniformly distributed within the square.
+        The square is centered at the origin.
+
+        Parameters
+        ----------
+        n : Number of points to generate.
+        type: int
+        rng : NumPy random number generator instance.
+        type: np.random.Generator
+
+        Returns
+        -------
+        np.ndarray
+            An array of shape (n, 2) representing the cloud of points.
+        """
+        half_side = self.side_length / 2.0
+        # Generate random x and y coordinates in the range [-half_side, half_side]
+        xs = rng.uniform(-half_side, half_side, n)
+        ys = rng.uniform(-half_side, half_side, n)
+        return np.column_stack([xs, ys])
+
     def draw_boundary(self, ax):
         """
         Draw the boundary of the square on the given axis.
