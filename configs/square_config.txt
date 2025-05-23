@@ -1,0 +1,12 @@
+square                 # domain
+6                 # number of players
+0.2 0.5                 # player 1 (x,y)
+0.5 0.8                 # player 2
+0.6 0.8
+0.4 0.6
+0.3 0.2
+0.4 0.1
+1e-6                # convergence tolerance
+1000                   # max iterations
+20000                   # samples per iteration
+1e-5

@@ -1,7 +1,5 @@
 import numpy as np
 from project_code.geometry.domain import Domain
-from scipy.spatial import Voronoi, voronoi_plot_2d
-from shapely.geometry import Polygon, Point, LineString
 import matplotlib.pyplot as plt
 
 '''
@@ -61,22 +59,6 @@ class Circle(Domain):
             return (x / norm) * self.radius
         else:
             return x
-
-
-    def _make_cloud(self, n, rng):
-        r  = np.sqrt(rng.random(n)) * self.radius
-        θ  = 2*np.pi * rng.random(n)
-        return np.column_stack([r*np.cos(θ), r*np.sin(θ)])
-
-    def mc_shares(self, pts, cloud):
-        """
-        Monte-Carlo shares for the k players in `pts`, using a *given*
-        cloud of demand points.  Returns length-k array summing to 1.
-        """
-        diff  = cloud[:, None, :] - pts[None, :, :]          # (n,k,2)
-        owner = np.argmin((diff**2).sum(axis=2), axis=1)     # (n,)
-        counts = np.bincount(owner, minlength=len(pts))
-        return counts / len(cloud)
 
     def compute_payoff(domain, positions, *, cloud=None, n_samples=50_000):
         """

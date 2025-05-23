@@ -4,8 +4,88 @@ import matplotlib.pyplot as plt
 import imageio.v2 as imageio
 import matplotlib.lines as mlines
 import os
+import re
 
-def plot_circle(domain, current_positions_list, player_colors, outdir, iteration, player_paths_history):
+
+def plot_square(domain, current_positions_list, player_colors, outdir, iteration, player_paths_history, max_iter):
+    half_side = domain.side_length / 2.0
+    pts_current = np.asarray(current_positions_list, float)
+    k = len(pts_current)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12.5, 6.5)) # Adjusted figsize slightly for square
+    ax_territory = axes[0]
+    ax_paths = axes[1]
+    fig.suptitle(f"Square Simulation - Iteration {iteration+1}", fontsize=14)
+
+    # --- Plot 1: Territories (Left Subplot) ---
+    RES = 250 # Resolution for the territory grid
+    # Create a grid covering the square
+    xs = np.linspace(-half_side, half_side, RES)
+    ys = np.linspace(-half_side, half_side, RES)
+    X, Y = np.meshgrid(xs, ys)
+
+    # Calculate ownership for each point in the grid
+    # diff shape: (RES, RES, k, 2)
+    diff = np.stack([X[...,None], Y[...,None]], axis=-1) - pts_current[None,None,:,:]
+    dist2 = (diff**2).sum(axis=-1) # shape: (RES, RES, k)
+    owner = dist2.argmin(axis=-1) # shape: (RES, RES)
+
+    img = np.zeros((RES, RES, 3))
+    for pid in range(k):
+        img[owner == pid] = player_colors[pid][:3]
+
+    # Display territories
+    ax_territory.imshow(img, extent=(-half_side, half_side, -half_side, half_side), origin='lower', zorder=0, aspect='auto')
+
+    # Use draw_boundary from the Square class
+    domain.draw_boundary(ax_territory) # This will also set xlim, ylim, and aspect
+
+    # Plot player positions
+    for i, (x, y) in enumerate(pts_current):
+        ax_territory.scatter(x, y, c='k', s=60, zorder=4)
+        ax_territory.scatter(x, y, c=player_colors[i][:3], s=30, zorder=5)
+        ax_territory.text(x, y, f"P{i+1}", ha='center', va='center', fontsize=7, zorder=6,
+                          bbox=dict(boxstyle='round,pad=0.15', fc='white', ec='none', alpha=0.7))
+
+    ax_territory.set_title(f"Territories", fontsize=10)
+    ax_territory.set_axis_off() # Turn off axis after draw_boundary might have set them
+
+    # --- Plot 2: Paths (Right Subplot) ---
+    # Use draw_boundary from the Square class
+    # We might want a slightly different background for paths
+    # Let's draw a light background rectangle first
+    background_rect = plt.Rectangle((-half_side, -half_side), domain.side_length, domain.side_length,
+                                    facecolor='whitesmoke', edgecolor='none', zorder=-1)
+    ax_paths.add_patch(background_rect)
+    domain.draw_boundary(ax_paths) # This will also set xlim, ylim, and aspect
+
+    for player_idx, path_list_of_arrays in enumerate(player_paths_history):
+        if len(path_list_of_arrays) > 1:
+            path_arr = np.array(path_list_of_arrays)
+            ax_paths.plot(path_arr[:, 0], path_arr[:, 1], color=player_colors[player_idx],
+                          linestyle='-', linewidth=1.2, alpha=0.7, zorder=1)
+            ax_paths.scatter(path_arr[-1, 0], path_arr[-1, 1], color=player_colors[player_idx],
+                             s=40, edgecolor='k', zorder=2, linewidth=0.5)
+            ax_paths.text(path_arr[-1, 0], path_arr[-1, 1] + half_side * 0.06, f"P{player_idx+1}",
+                          ha='center', va='bottom', fontsize=6, color='black', zorder=3)
+        elif len(path_list_of_arrays) == 1:
+            ax_paths.scatter(path_list_of_arrays[0][0], path_list_of_arrays[0][1], color=player_colors[player_idx],
+                             s=40, edgecolor='k', zorder=2, linewidth=0.5)
+            ax_paths.text(path_list_of_arrays[0][0], path_list_of_arrays[0][1] + half_side * 0.06, f"P{player_idx+1}",
+                          ha='center', va='bottom', fontsize=6, color='black', zorder=3)
+
+    ax_paths.set_title(f"Player Paths", fontsize=10)
+    ax_paths.set_axis_off() # Turn off axis after draw_boundary might have set them
+
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+
+    num_digits = len(str(max_iter - 1)) if max_iter > 0 else 1
+    out_path = outdir / f"frame_{iteration:0{num_digits}d}.png"
+    fig.savefig(out_path, dpi=120) # Consistent DPI with circle
+    plt.close(fig)
+    return str(out_path)
+
+def plot_circle(domain, current_positions_list, player_colors, outdir, iteration, player_paths_history, max_iter): # Add max_iter
     R = domain.radius
     pts_current = np.asarray(current_positions_list, float)
     k = len(pts_current)
@@ -25,11 +105,11 @@ def plot_circle(domain, current_positions_list, player_colors, outdir, iteration
     diff = np.stack([X[...,None], Y[...,None]], axis=-1) - pts_current[None,None,:,:]
     dist2 = (diff**2).sum(axis=-1)
     owner = dist2.argmin(axis=-1)
-    owner[~mask] = k
+    owner[~mask] = k # Assign points outside circle to a dummy owner 'k'
 
     img = np.zeros((RES, RES, 3))
     for pid in range(k): img[owner == pid] = player_colors[pid][:3]
-    img[owner == k] = (1,1,1)
+    img[owner == k] = (1,1,1) # Color for outside points (white)
 
     ax_territory.imshow(img, extent=(-PAD, PAD, -PAD, PAD), origin='lower', zorder=0)
     ax_territory.add_patch(plt.Circle((0,0), R, fc='none', ec='k', lw=1, zorder=1))
@@ -68,12 +148,15 @@ def plot_circle(domain, current_positions_list, player_colors, outdir, iteration
     ax_paths.set_title(f"Player Paths", fontsize=10)
 
     fig.tight_layout(rect=[0, 0, 1, 0.95]) # Adjust for suptitle
-    out_path = outdir / f"frame_{iteration:03d}.png"
+
+    num_digits = len(str(max_iter - 1)) if max_iter > 0 else 1
+
+    out_path = outdir / f"frame_{iteration:0{num_digits}d}.png" # Use dynamic padding
     fig.savefig(out_path, dpi=120)
     plt.close(fig)
     return str(out_path)
 
-def plot_sphere(domain, current_positions_list, shares, player_colors, outdir, iteration, player_paths_history):
+def plot_sphere(domain, current_positions_list, shares, player_colors, outdir, iteration, player_paths_history, max_iter): # Add max_iter
     fig = plt.figure(figsize=(13, 11)) # Adjusted for 2x2
     fig.suptitle(f"Sphere Simulation - Iteration {iteration+1}", fontsize=14)
 
@@ -141,15 +224,36 @@ def plot_sphere(domain, current_positions_list, shares, player_colors, outdir, i
         ax.set_title(s_def["title"], fontsize=9)
 
     fig.tight_layout(rect=[0, 0, 1, 0.95]) # Adjust for suptitle
-    out_path = outdir / f"frame_{iteration:03d}.png"
+
+    num_digits = len(str(max_iter - 1)) if max_iter > 0 else 1
+
+    out_path = outdir / f"frame_{iteration:0{num_digits}d}.png" # Use dynamic padding
     fig.savefig(out_path, dpi=100) # Reduced DPI
     plt.close(fig)
     return str(out_path)
 
-def create_animation(frame_dir, output_path="hotelling.gif", fps=2):
-    frame_dir = pathlib.Path(frame_dir)
+def create_animation(frame_dir_str, output_filename="hotelling.gif", fps=10):
+    frame_dir = pathlib.Path(frame_dir_str)
+    output_path = pathlib.Path(output_filename) # Use the provided filename
+
+    # Ensure output directory exists
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+
     print(f"Looking for frames in: {frame_dir.resolve()}")
-    png_files = sorted(frame_dir.glob("frame_*.png"))
+
+    # Define a function to extract the numerical part of the filename for robust sorting
+    def extract_frame_number(file_path):
+        match = re.search(r"frame_(\d+)\.png$", file_path.name)
+        if match:
+            return int(match.group(1))
+        # Fallback for files that might not match, or return a large number to sort them last
+        # This case should ideally not be hit if filenames are consistent
+        return float('inf')
+
+    # Get all frame_*.png files and sort them numerically
+    png_files = sorted(frame_dir.glob("frame_*.png"), key=extract_frame_number)
+
 
     if not png_files:
         print(f"No PNG files found in {frame_dir}. Animation not created.")
@@ -159,6 +263,7 @@ def create_animation(frame_dir, output_path="hotelling.gif", fps=2):
     with imageio.get_writer(output_path, mode='I', duration=int(1000/fps), loop=0) as writer:
         frames_processed = 0
         for png_path in png_files:
+            print(f"Processing {png_path}...")
             try:
                 if os.path.getsize(png_path) == 0:
                     print(f"Skipping empty file: {png_path}")
